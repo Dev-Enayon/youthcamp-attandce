@@ -1,0 +1,228 @@
+// Gospel Of Truth Mission — Youth Camp Programme Registration System
+// Prisma schema. PostgreSQL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum AdminRole {
+  SUPERADMIN
+  ADMIN
+  STAFF
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  PREFER_NOT_TO_SAY
+}
+
+enum RegistrationStatus {
+  REGISTERED
+  CONFIRMED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  NOT_REQUIRED
+  UNPAID
+  PAID
+  WAIVED
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         AdminRole @default(ADMIN)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+
+  auditLogs    AdminAuditLog[]
+  notes        ParticipantNote[]
+  statusChanges StatusChange[]
+
+  @@index([role])
+  @@index([isActive])
+}
+
+/// Single-row configuration table. The application always reads the oldest row.
+model CampSettings {
+  id                   String    @id @default(cuid())
+  title                String?
+  theme                String?
+  bibleVerse           String?
+  description          String?
+  startDate            DateTime?
+  endDate              DateTime?
+  venue                String?
+  venueAddress         String?
+  registrationDeadline DateTime?
+  contactPhone         String?
+  contactEmail         String?
+  registrationFee      Decimal?  @db.Decimal(12, 2)
+  currency             String    @default("NGN")
+  registrationOpen     Boolean   @default(true)
+  capacity             Int?
+  categories           String[]  @default(["Youth", "Teenager", "Other"])
+  tShirtSizes          String[]  @default(["S", "M", "L", "XL", "XXL"])
+  requiredFields       Json      @default("{}")
+  privacyNotice        String?
+  terms                String?
+  privacyNoticeVersion String    @default("1.0")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+model ChurchAssembly {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  branch    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  participants Participant[]
+
+  @@index([isActive])
+}
+
+model Participant {
+  id                      String             @id @default(cuid())
+  registrationReference   String             @unique
+  idempotencyKey          String?            @unique
+
+  firstName               String
+  middleName              String?
+  lastName                String
+  dateOfBirth             DateTime
+  gender                  Gender             @default(PREFER_NOT_TO_SAY)
+
+  phone                   String
+  email                   String?
+  address                 String?
+  state                   String
+  town                    String
+
+  churchAssemblyId        String?
+  churchAssembly          ChurchAssembly?    @relation(fields: [churchAssemblyId], references: [id], onDelete: SetNull)
+  pastorName              String?
+  pastorPhone             String?
+
+  participantCategory     String?
+  tShirtSize              String?
+  dietaryRequirements     String?
+  assistanceRequirements  String?
+  additionalInformation   String?
+
+  emergencyContactName         String
+  emergencyContactRelationship String
+  emergencyContactPhone        String
+
+  isMinor                 Boolean  @default(false)
+  guardianName            String?
+  guardianPhone           String?
+  guardianConsentAt       DateTime?
+
+  accuracyConsentAt       DateTime
+  termsAcceptedAt         DateTime
+  privacyNoticeVersion    String
+
+  registrationStatus      RegistrationStatus @default(REGISTERED)
+  paymentStatus           PaymentStatus      @default(NOT_REQUIRED)
+
+  registeredAt            DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  notes       ParticipantNote[]
+  statusChanges StatusChange[]
+
+  @@index([lastName])
+  @@index([phone])
+  @@index([email])
+  @@index([registeredAt])
+  @@index([registrationStatus])
+  @@index([churchAssemblyId])
+  @@index([dateOfBirth])
+}
+
+model ParticipantCategory {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+model ParticipantNote {
+  id            String    @id @default(cuid())
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  adminUserId   String
+  adminUser     AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Restrict)
+  body          String
+  createdAt     DateTime  @default(now())
+
+  @@index([participantId])
+  @@index([adminUserId])
+}
+
+model StatusChange {
+  id            String             @id @default(cuid())
+  participantId String
+  participant   Participant        @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  adminUserId   String
+  adminUser     AdminUser          @relation(fields: [adminUserId], references: [id], onDelete: Restrict)
+  fromStatus    RegistrationStatus?
+  toStatus      RegistrationStatus
+  reason        String?
+  createdAt     DateTime           @default(now())
+
+  @@index([participantId])
+  @@index([adminUserId])
+}
+
+model AdminAuditLog {
+  id          String    @id @default(cuid())
+  adminUserId String?
+  adminUser   AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+  action      String
+  entityType  String
+  entityId    String?
+  reason      String?
+  safeMetadata Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([adminUserId])
+  @@index([entityType])
+  @@index([action])
+  @@index([createdAt])
+}
+
+/// Atomic per-year counter used to generate unique registration references.
+model RegistrationCounter {
+  year       Int      @id
+  lastNumber Int      @default(0)
+  updatedAt  DateTime @updatedAt
+}
+
+/// Database-backed fixed-window rate limiter (works across serverless instances).
+model RateLimitEntry {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
